@@ -1,0 +1,235 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Jan 20 22:27:22 2024
+
+@author: trakya
+"""
+
+from tensorflow.keras.layers import Input, Flatten, Dense
+from tensorflow.keras.models import Model
+from tensorflow.keras.applications.resnet import ResNet50, preprocess_input
+#from keras.preprocessing import image
+from tensorflow.keras.preprocessing.image import img_to_array, load_img
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from keras.models import Sequential
+import numpy as np
+from glob import glob
+import matplotlib.pyplot as plt
+import os 
+
+
+train_path = 'C:/Users/trakya/chestxray/sentetik/train'
+val_path = 'C:/Users/trakya/chestxray/sentetik/val'
+test_path = 'C:/Users/trakya/chestxray/sentetik/test'
+
+
+# re-size all the images to a size VGG-16 expects.
+IMAGE_SIZE = [150, 150]
+
+# Set the batch size
+BATCH_SIZE = 128 # try reducing batch size or freeze more layers if your GPU run outs of memory
+NUM_EPOCHS = 5
+LEARNING_RATE = 0.0001
+NUM_CLASSES = 2 # We are aware of it.
+
+
+import os
+CLASSES = os.listdir(train_path)
+
+
+
+
+print("Class --> {} \n and the length is : {}".format(CLASSES, NUM_CLASSES))
+
+
+# Image Data Augmentation
+
+train_datagen = ImageDataGenerator(
+    rescale = 1./255,
+    shear_range = 0.2,
+    zoom_range = 0.2,
+    horizontal_flip = True
+)
+
+# Import the images from the train dataset.
+# Make sure to provide the same target size as initialied for the image size
+training_set = train_datagen.flow_from_directory(
+    directory = train_path,
+    target_size = (150, 150),
+    batch_size = BATCH_SIZE,
+    class_mode = 'categorical'
+)
+
+test_datagen = ImageDataGenerator(rescale = 1./255)
+
+
+
+# Import the images from the test dataset.
+
+test_set = test_datagen.flow_from_directory(
+    directory = test_path,
+    target_size = (150, 150),
+    batch_size = BATCH_SIZE,
+    class_mode = 'categorical'
+)
+
+
+
+# Import the VGG 16 library as shown below and add preprocessing layer to the front of VGG
+# Here we will be using imagenet weights
+
+
+resnet_model = ResNet50(input_shape = IMAGE_SIZE + [3], weights='imagenet', include_top=False)
+
+
+
+# don't train existing weights
+for layer in resnet_model.layers:
+    layer.trainable = False
+    
+from tensorflow.keras.layers import Dropout
+# our layers - you can add more if you want
+x = Flatten()(resnet_model.output)
+
+x = Dropout(0.1)(x)
+
+prediction = Dense(NUM_CLASSES, activation='softmax')(x)
+
+# create a model object
+resnet_custom_model = Model(inputs=resnet_model.input, outputs=prediction)
+
+resnet_custom_model.summary()
+
+# tell the model what cost and optimization method to use
+resnet_custom_model.compile(
+  loss='categorical_crossentropy',
+  optimizer='ADAM',
+  metrics=['accuracy']
+)
+
+history = resnet_custom_model.fit(
+  training_set,
+  validation_data=test_set,
+  epochs=100,
+  steps_per_epoch=len(training_set),
+  validation_steps=len(test_set)
+)
+
+
+resnet_custom_model.save('my_model.h5')
+
+
+
+# Generate Validation set.
+validation_datagen = ImageDataGenerator(rescale = 1./255)
+
+validation_set = validation_datagen.flow_from_directory(
+    directory = val_path,
+    target_size = (150, 150),
+    batch_size = BATCH_SIZE,
+    class_mode = 'categorical'
+)
+
+
+validation_steps = 200
+
+loss0,accuracy0 = resnet_custom_model.evaluate(validation_set, steps = validation_steps)
+
+print("loss: {:.2f}".format(loss0))
+print("accuracy: {:.2f}".format(accuracy0))
+
+
+# Generate Validation set.
+validation_set2 = validation_datagen.flow_from_directory(
+    directory = val_path,
+    target_size = (150, 150),
+    batch_size = 1,
+    shuffle=False, 
+    seed=42, 
+    class_mode="categorical"
+)
+
+# validation_set2.reset()
+
+
+# just capture the loss and accuray into val variable... unlike in pervious code to capture into loss0 and accuracy0. Just to showcase alternate way.
+
+val = resnet_custom_model.evaluate(validation_set, steps = validation_steps)
+
+print("loss: {:.2f}".format(val[0]))
+print("accuracy: {:.2f}".format(val[1]))
+
+
+# summarize history for loss
+
+plt.plot(history.history['loss'], label='Train loss')
+plt.plot(history.history['val_loss'], label='Validation (Test) loss')
+plt.title('summarize history for loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+
+# summarize history for accuracy
+
+plt.plot(history.history['accuracy'])
+plt.plot(history.history['val_accuracy'])
+plt.title('summarize history for accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+img_normal = load_img('C:/Users/trakya/chestxray/sentetik/train/NORMAL/98 (19).jpeg', target_size=(150,150))
+img_pneumonia = load_img('C:/Users/trakya/chestxray/sentetik/test/PNEUMONIA/43 (12).jpeg', target_size=(150,150))
+
+def model_predict(img, actual):
+    x = img_to_array(img)
+    x = np.expand_dims(x, axis=0)
+    x_processed = preprocess_input(x)
+    result = resnet_custom_model.predict(x_processed)
+    
+  
+    # Doğrulama kümesi üretecindeki sınıf etiketlerini kullanarak tahmin edilen sınıf adını alın
+    class_labels = list(validation_set2.class_indices.keys())
+    predicted_label = class_labels[np.argmax(result)]
+
+    plt.figure()
+    plt.imshow(img)
+    plt.title('Gerçek: {} --> Tahmin: {}'.format(actual, predicted_label))
+
+from sklearn.metrics import precision_score, recall_score, f1_score
+
+# Gerçek etiketleri ve tahminleri saklayacak listeler oluşturalım
+true_labels = []
+predicted_labels = []
+
+# Doğrulama veri setindeki görüntüler ve etiketler üzerinden dönelim
+for i in range(len(validation_set2)):
+    # Görüntüleri ve etiketleri alalım
+    images, labels = validation_set2[i]
+    true_labels.extend(np.argmax(labels, axis=1))  # Gerçek etiketleri true_labels listesine ekleyelim
+    
+    # Görüntülerden tahminleri yapalım
+    predictions = resnet_custom_model.predict(images)
+    predicted_labels.extend(np.argmax(predictions, axis=1))  # Tahmin edilen etiketleri predicted_labels listesine ekleyelim
+
+# Hassasiyet, özgüllük ve F1 skorlarını hesaplayalım
+precision = precision_score(true_labels, predicted_labels)
+recall = recall_score(true_labels, predicted_labels)
+f1 = f1_score(true_labels, predicted_labels)
+
+# Sonuçları yazdıralım
+print("Hassasiyet (Precision): {:.2f}".format(precision))
+print("Özgüllük (Recall): {:.2f}".format(recall))
+print("F1 Skoru: {:.2f}".format(f1))
+
+model_predict(img_normal, 'normal')
+model_predict(img_pneumonia, 'pneumonia')
+
+
+
+img = load_img('C:/Users/trakya/chestxray/sentetik/val/PNEUMONIA/50.jpeg', target_size = (150, 150))
+
+pred = model_predict(img, "")
